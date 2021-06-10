@@ -41,9 +41,12 @@ The first step will create a source package from DART git checkout in the local
 system and upload it to Open Robotics PPA.
 
 **One Ubuntu distribution needs to be released at a time**. The information
-about target distribution (start with bionic) goes only in the Changelog entry. To
+about target distribution (bionic) goes only in the Changelog entry. To
 release multiple distribution, repeat this step 1 changing the changelog entry 
-(focal is also supported) and uploading the new source package to the PPA.
+and uploading the new source package to the PPA.
+
+**Focal is not supported to be imported into packages.osrfoundation.org since we 
+are using Ubuntu's packages**
 
 A copy of [this fork](https://github.com/ignition-forks/dart) is required to be in the system.
 
@@ -87,4 +90,20 @@ for the selected Ubuntu distribution in all arches (supported architectures can 
 
 ## Step 2: Copy packages to packages.osrfoundation.org
 
-TODO
+### Update reprepro importer config
+
+Create a PR against the `refactor_osrfbuild` branch in reprepro-updater repository and change the 
+[SourceVersion field to the new one released in the PPA](https://github.com/ros-infrastructure/reprepro-updater/blob/refactor_osrfbuild/config/packages.osrfoundation.org/openrobotics_dart_packages_from_ppa.yaml#L8).
+
+### Run reprepro-importer Jenkins test
+
+Rebuild [this build](https://build.osrfoundation.org/job/reprepro_importer/33) of reprepro-importer 
+(note that the [paremeters](https://build.osrfoundation.org/job/reprepro_importer/33/parameters/) 
+set ubuntu_testing as repository which is a unofficial playground). Check the output to see the simulation
+of packages being imported (commit parameter is not set so no real action is done).
+
+### Run reprepro-importer real import
+
+Run the same Jenkins job changing the parameter`UPLOAD_TO_REPO`to *ubuntu_stable*.
+Run without `COMMIT` set to check that simulation is fine. If everything is good, 
+re-run with `COMMIT` checked.
