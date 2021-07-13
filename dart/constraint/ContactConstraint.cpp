@@ -33,6 +33,8 @@
 #include "dart/constraint/ContactConstraint.hpp"
 
 #include <iostream>
+#include <mutex>
+#include <unordered_map>
 
 #include "dart/external/odelcpsolver/lcp.h"
 
@@ -49,12 +51,6 @@
 #define DART_CFM 1e-5
 // #define DART_MAX_NUMBER_OF_CONTACTS 32
 
-#define DART_RESTITUTION_COEFF_THRESHOLD 1e-3
-#define DART_FRICTION_COEFF_THRESHOLD 1e-3
-#define DART_BOUNCING_VELOCITY_THRESHOLD 1e-1
-#define DART_MAX_BOUNCING_VELOCITY 1e+2
-#define DART_CONTACT_CONSTRAINT_EPSILON_SQUARED 1e-12
-
 namespace dart {
 namespace constraint {
 
@@ -63,17 +59,24 @@ double ContactConstraint::mErrorReductionParameter = DART_ERP;
 double ContactConstraint::mMaxErrorReductionVelocity = DART_MAX_ERV;
 double ContactConstraint::mConstraintForceMixing = DART_CFM;
 
-constexpr double DART_DEFAULT_FRICTION_COEFF = 1.0;
-constexpr double DART_DEFAULT_RESTITUTION_COEFF = 0.0;
-// slip compliance is combined through addition,
-// so set to half the global default value
-constexpr double DART_DEFAULT_SLIP_COMPLIANCE = 0.0;
-const Eigen::Vector3d DART_DEFAULT_FRICTION_DIR =
-    Eigen::Vector3d::UnitZ();
+// These two globals are a hack made to retain ABI compatibility.
+// TODO(anyone): Revert e95a6 in a future ABI-breaking version.
+std::mutex gContactSurfaceMotionVelocitiesMutex;
+std::unordered_map<ContactConstraint*, Eigen::Vector3d>
+    gContactSurfaceMotionVelocities;
 
 //==============================================================================
 ContactConstraint::ContactConstraint(
-    collision::Contact& contact, double timeStep)
+    collision::Contact& contact, double timeStep) :
+    ContactConstraint(contact, timeStep,
+                      DefaultContactSurfaceHandler().createParams(contact, 1u))
+{
+}
+
+//==============================================================================
+ContactConstraint::ContactConstraint(
+    collision::Contact& contact, double timeStep,
+    const ContactSurfaceParams& contactSurfaceParams)
   : ConstraintBase(),
     mTimeStep(timeStep),
     mBodyNodeA(const_cast<dynamics::ShapeFrame*>(
@@ -98,19 +101,10 @@ ContactConstraint::ContactConstraint(
   assert(
       contact.normal.squaredNorm() >= DART_CONTACT_CONSTRAINT_EPSILON_SQUARED);
 
-  const auto* shapeNodeA = const_cast<dynamics::ShapeFrame*>(
-                               contact.collisionObject1->getShapeFrame())
-                               ->asShapeNode();
-  const auto* shapeNodeB = const_cast<dynamics::ShapeFrame*>(
-                               contact.collisionObject2->getShapeFrame())
-                               ->asShapeNode();
-
   //----------------------------------------------
   // Bounce
   //----------------------------------------------
-  const double restitutionCoeffA = computeRestitutionCoefficient(shapeNodeA);
-  const double restitutionCoeffB = computeRestitutionCoefficient(shapeNodeB);
-  mRestitutionCoeff = restitutionCoeffA * restitutionCoeffB;
+  mRestitutionCoeff = contactSurfaceParams.mRestitutionCoeff;
   if (mRestitutionCoeff > DART_RESTITUTION_COEFF_THRESHOLD)
     mIsBounceOn = true;
   else
@@ -119,71 +113,18 @@ ContactConstraint::ContactConstraint(
   //----------------------------------------------
   // Friction
   //----------------------------------------------
-  // TODO(JS): Assume the frictional coefficient can be changed during
-  //           simulation steps.
-  // Update mFrictionCoeff
-  const double frictionCoeffA = computeFrictionCoefficient(shapeNodeA);
-  const double frictionCoeffB = computeFrictionCoefficient(shapeNodeB);
-  const double secondaryFrictionCoeffA =
-                       computeSecondaryFrictionCoefficient(shapeNodeA);
-  const double secondaryFrictionCoeffB =
-                       computeSecondaryFrictionCoefficient(shapeNodeB);
-
-  // TODO(JS): Consider providing various ways of the combined friction or
-  // allowing to override this method by a custom method
-  mFrictionCoeff = std::min(frictionCoeffA, frictionCoeffB);
-  mSecondaryFrictionCoeff =
-      std::min(secondaryFrictionCoeffA, secondaryFrictionCoeffB);
+  mFrictionCoeff = contactSurfaceParams.mFrictionCoeff;
+  mSecondaryFrictionCoeff = contactSurfaceParams.mSecondaryFrictionCoeff;
   if (mFrictionCoeff > DART_FRICTION_COEFF_THRESHOLD ||
       mSecondaryFrictionCoeff > DART_FRICTION_COEFF_THRESHOLD)
   {
     mIsFrictionOn = true;
 
-    // Compute slip compliance
-    const double slipComplianceA = computeSlipCompliance(shapeNodeA);
-    const double slipComplianceB = computeSlipCompliance(shapeNodeB);
-    const double secondarySlipComplianceA =
-                         computeSecondarySlipCompliance(shapeNodeA);
-    const double secondarySlipComplianceB =
-                         computeSecondarySlipCompliance(shapeNodeB);
     // Combine slip compliances through addition
-    mSlipCompliance = slipComplianceA + slipComplianceB;
-    mSecondarySlipCompliance =
-        secondarySlipComplianceA + secondarySlipComplianceB;
+    mSlipCompliance = contactSurfaceParams.mSlipCompliance;
+    mSecondarySlipCompliance = contactSurfaceParams.mSecondarySlipCompliance;
 
-    // Check shapeNodes for valid friction direction unit vectors
-    auto frictionDirA = computeWorldFirstFrictionDir(shapeNodeA);
-    auto frictionDirB = computeWorldFirstFrictionDir(shapeNodeB);
-
-    // resulting friction direction unit vector
-    bool nonzeroDirA = frictionDirA.squaredNorm() >= DART_CONTACT_CONSTRAINT_EPSILON_SQUARED;
-    bool nonzeroDirB = frictionDirB.squaredNorm() >= DART_CONTACT_CONSTRAINT_EPSILON_SQUARED;
-
-    // only consider custom friction direction if one has nonzero length
-    if (nonzeroDirA || nonzeroDirB)
-    {
-      // if A and B are both set, choose one with smaller friction coefficient
-      // since it's friction properties will dominate
-      if (nonzeroDirA && nonzeroDirB)
-      {
-        if (frictionCoeffA <= frictionCoeffB)
-        {
-          mFirstFrictionalDirection = frictionDirA.normalized();
-        }
-        else
-        {
-          mFirstFrictionalDirection = frictionDirB.normalized();
-        }
-      }
-      else if (nonzeroDirA)
-      {
-        mFirstFrictionalDirection = frictionDirA.normalized();
-      }
-      else
-      {
-        mFirstFrictionalDirection = frictionDirB.normalized();
-      }
-    }
+    mFirstFrictionalDirection = contactSurfaceParams.mFirstFrictionalDirection;
 
     // Update frictional direction
     updateFirstFrictionalDirection();
@@ -191,6 +132,12 @@ ContactConstraint::ContactConstraint(
   else
   {
     mIsFrictionOn = false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceMotionVelocitiesMutex);
+    gContactSurfaceMotionVelocities[this] =
+        contactSurfaceParams.mContactSurfaceMotionVelocity;
   }
 
   assert(mBodyNodeA->getSkeleton());
@@ -295,6 +242,13 @@ ContactConstraint::ContactConstraint(
     mSpatialNormalA.col(0).tail<3>().noalias() = bodyDirectionA;
     mSpatialNormalB.col(0).tail<3>().noalias() = bodyDirectionB;
   }
+}
+
+//==============================================================================
+ContactConstraint::~ContactConstraint()
+{
+  std::lock_guard<std::mutex> lock(gContactSurfaceMotionVelocitiesMutex);
+  gContactSurfaceMotionVelocities.erase(this);
 }
 
 //==============================================================================
@@ -475,6 +429,13 @@ void ContactConstraint::getInformation(ConstraintInfo* info)
     }
 
     info->b[0] += bouncingVelocity;
+    {
+      std::lock_guard<std::mutex> lock(gContactSurfaceMotionVelocitiesMutex);
+      const auto& surfaceVelocity = gContactSurfaceMotionVelocities[this];
+      info->b[0] += surfaceVelocity.x();
+      info->b[1] += surfaceVelocity.y();
+      info->b[2] += surfaceVelocity.z();
+    }
 
     // TODO(JS): Initial guess
     // x
@@ -530,6 +491,10 @@ void ContactConstraint::getInformation(ConstraintInfo* info)
     }
 
     info->b[0] += bouncingVelocity;
+    {
+      std::lock_guard<std::mutex> lock(gContactSurfaceMotionVelocitiesMutex);
+      info->b[0] += gContactSurfaceMotionVelocities[this].x();
+    }
 
     // TODO(JS): Initial guess
     // x
@@ -741,141 +706,44 @@ bool ContactConstraint::isActive() const
 double ContactConstraint::computeFrictionCoefficient(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract friction coefficient "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_FRICTION_COEFF << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_FRICTION_COEFF;
-  }
-
-  return dynamicAspect->getFrictionCoeff();
+  return DefaultContactSurfaceHandler::computeFrictionCoefficient(shapeNode);
 }
 
 //==============================================================================
 double ContactConstraint::computeSecondaryFrictionCoefficient(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract "
-           << "secondary friction coefficient "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_FRICTION_COEFF << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_FRICTION_COEFF;
-  }
-
-  return dynamicAspect->getSecondaryFrictionCoeff();
+  return DefaultContactSurfaceHandler::computeSecondaryFrictionCoefficient(
+      shapeNode);
 }
 
 //==============================================================================
 double ContactConstraint::computeSlipCompliance(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract slip compliance "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_SLIP_COMPLIANCE << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_SLIP_COMPLIANCE;
-  }
-
-  double slipCompliance = dynamicAspect->getSlipCompliance();
-  if (slipCompliance < 0)
-  {
-    return DART_DEFAULT_SLIP_COMPLIANCE;
-  }
-  return slipCompliance;
+  return DefaultContactSurfaceHandler::computeSlipCompliance(shapeNode);
 }
 
 //==============================================================================
 double ContactConstraint::computeSecondarySlipCompliance(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract "
-           << "secondary slip compliance "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_SLIP_COMPLIANCE << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_SLIP_COMPLIANCE;
-  }
-
-  double slipCompliance = dynamicAspect->getSecondarySlipCompliance();
-  if (slipCompliance < 0)
-  {
-    return DART_DEFAULT_SLIP_COMPLIANCE;
-  }
-  return slipCompliance;
+  return DefaultContactSurfaceHandler::computeSecondarySlipCompliance(
+      shapeNode);
 }
 
 //==============================================================================
 Eigen::Vector3d ContactConstraint::computeWorldFirstFrictionDir(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract friction direction "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_FRICTION_DIR << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_FRICTION_DIR;
-  }
-
-  auto frame = dynamicAspect->getFirstFrictionDirectionFrame();
-  Eigen::Vector3d frictionDir = dynamicAspect->getFirstFrictionDirection();
-
-  // rotate using custom frame if it is specified
-  if (frame)
-  {
-    return frame->getWorldTransform().linear() * frictionDir;
-  }
-  // otherwise rotate using shapeNode
-  return shapeNode->getWorldTransform().linear() * frictionDir;
+  return DefaultContactSurfaceHandler::computeWorldFirstFrictionDir(shapeNode);
 }
 
 //==============================================================================
 double ContactConstraint::computeRestitutionCoefficient(
     const dynamics::ShapeNode* shapeNode)
 {
-  assert(shapeNode);
-
-  auto dynamicAspect = shapeNode->getDynamicsAspect();
-
-  if (dynamicAspect == nullptr)
-  {
-    dtwarn << "[ContactConstraint] Attempt to extract restitution coefficient "
-           << "from a ShapeNode that doesn't have DynamicAspect. The default "
-           << "value (" << DART_DEFAULT_RESTITUTION_COEFF << ") will be used "
-           << "instead.\n";
-    return DART_DEFAULT_RESTITUTION_COEFF;
-  }
-
-  return dynamicAspect->getRestitutionCoeff();
+  return DefaultContactSurfaceHandler::computeRestitutionCoefficient(shapeNode);
 }
 
 //==============================================================================

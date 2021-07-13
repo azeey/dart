@@ -32,6 +32,8 @@
 
 #include "dart/constraint/ConstraintSolver.hpp"
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
 
 #include "dart/collision/CollisionFilter.hpp"
 #include "dart/collision/CollisionGroup.hpp"
@@ -42,6 +44,7 @@
 #include "dart/common/Console.hpp"
 #include "dart/constraint/ConstrainedGroup.hpp"
 #include "dart/constraint/ContactConstraint.hpp"
+#include "dart/constraint/ContactSurface.hpp"
 #include "dart/constraint/JointCoulombFrictionConstraint.hpp"
 #include "dart/constraint/JointLimitConstraint.hpp"
 #include "dart/constraint/LCPSolver.hpp"
@@ -57,6 +60,12 @@ namespace dart {
 namespace constraint {
 
 using namespace dynamics;
+
+// These two globals are a hack made to retain ABI compatibility.
+// TODO(anyone): Revert e95a6 in a future ABI-breaking version.
+std::mutex gContactSurfaceHandlersMutex;
+std::unordered_map<const ConstraintSolver*, ContactSurfaceHandlerPtr>
+    gContactSurfaceHandlers;
 
 //==============================================================================
 ConstraintSolver::ConstraintSolver(double timeStep)
@@ -75,6 +84,12 @@ ConstraintSolver::ConstraintSolver(double timeStep)
   // TODO(JS): Consider using FCL's primitive shapes once FCL addresses
   // incorrect contact point computation.
   // (see: https://github.com/flexible-collision-library/fcl/issues/106)
+
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+    gContactSurfaceHandlers[this] =
+        std::make_shared<DefaultContactSurfaceHandler>();
+  }
 }
 
 //==============================================================================
@@ -92,6 +107,19 @@ ConstraintSolver::ConstraintSolver()
   // TODO(JS): Consider using FCL's primitive shapes once FCL addresses
   // incorrect contact point computation.
   // (see: https://github.com/flexible-collision-library/fcl/issues/106)
+
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+    gContactSurfaceHandlers[this] =
+        std::make_shared<DefaultContactSurfaceHandler>();
+  }
+}
+
+//==============================================================================
+ConstraintSolver::~ConstraintSolver()
+{
+  std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+  gContactSurfaceHandlers.erase(this);
 }
 
 //==============================================================================
@@ -389,6 +417,11 @@ void ConstraintSolver::setFromOtherConstraintSolver(
 
   addSkeletons(other.getSkeletons());
   mManualConstraints = other.mManualConstraints;
+
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+    gContactSurfaceHandlers[this] = gContactSurfaceHandlers[&other];
+  }
 }
 
 //==============================================================================
@@ -500,6 +533,7 @@ void ConstraintSolver::updateConstraints()
   };
 
   std::map<ContactPair, size_t, ContactPairCompare> contactPairMap;
+  std::vector<collision::Contact*> contacts;
 
   // Create new contact constraints
   for (auto i = 0u; i < mCollisionResult.getNumContacts(); ++i)
@@ -542,27 +576,28 @@ void ConstraintSolver::updateConstraints()
       ++contactPairMap[std::make_pair(
           contact.collisionObject1, contact.collisionObject2)];
 
-      mContactConstraints.push_back(
-          std::make_shared<ContactConstraint>(contact, mTimeStep));
+      contacts.push_back(&contact);
     }
   }
 
   // Add the new contact constraints to dynamic constraint list
-  for (const auto& contactConstraint : mContactConstraints)
+  for (auto* contact : contacts)
   {
-    // update the slip compliances of the contact constraints based on the
-    // number of contacts between the collision objects.
-    auto& contact = contactConstraint->getContact();
     std::size_t numContacts = 1;
     auto it = contactPairMap.find(
-        std::make_pair(contact.collisionObject1, contact.collisionObject2));
+        std::make_pair(contact->collisionObject1, contact->collisionObject2));
     if (it != contactPairMap.end())
       numContacts = it->second;
 
-    contactConstraint->setPrimarySlipCompliance(
-        contactConstraint->getPrimarySlipCompliance() * numContacts);
-    contactConstraint->setSecondarySlipCompliance(
-        contactConstraint->getSecondarySlipCompliance() * numContacts);
+    ContactConstraintPtr contactConstraint;
+    {
+      std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+      contactConstraint = gContactSurfaceHandlers[this]->createConstraint(
+          *contact, numContacts, mTimeStep);
+    }
+
+    mContactConstraints.push_back(contactConstraint);
+
     contactConstraint->update();
 
     if (contactConstraint->isActive())
@@ -748,6 +783,57 @@ bool ConstraintSolver::isSoftContact(const collision::Contact& contact) const
       = dynamic_cast<const dynamics::SoftBodyNode*>(bodyNode2) != nullptr;
 
   return bodyNode1IsSoft || bodyNode2IsSoft;
+}
+
+//==============================================================================
+ContactSurfaceHandlerPtr
+ConstraintSolver::getContactSurfaceHandler() const
+{
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+    return gContactSurfaceHandlers[this];
+  }
+}
+
+//==============================================================================
+void ConstraintSolver::setContactSurfaceHandler(
+    ContactSurfaceHandlerPtr handler)
+{
+  {
+    std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+    handler->setParent(gContactSurfaceHandlers[this]);
+    gContactSurfaceHandlers[this] = std::move(handler);
+  }
+}
+
+//==============================================================================
+bool ConstraintSolver::removeContactSurfaceHandler(
+    const ContactSurfaceHandlerPtr& handler)
+{
+  bool found = false;
+  std::lock_guard<std::mutex> lock(gContactSurfaceHandlersMutex);
+  ContactSurfaceHandlerPtr current = gContactSurfaceHandlers[this];
+  ContactSurfaceHandlerPtr previous = nullptr;
+  while (current != nullptr)
+  {
+    if (current == handler)
+    {
+      if (previous != nullptr)
+        previous->mParent = current->mParent;
+      else
+        gContactSurfaceHandlers[this] = current->mParent;
+      found = true;
+      break;
+    }
+    previous = current;
+    current = current->mParent;
+  }
+
+  if (gContactSurfaceHandlers[this] == nullptr)
+    dterr << "No contact surface handler remained. This is an error. Add at "
+          << "least DefaultContactSurfaceHandler." << std::endl;
+
+  return found;
 }
 
 } // namespace constraint

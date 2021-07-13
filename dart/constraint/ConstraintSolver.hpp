@@ -77,7 +77,7 @@ public:
   ConstraintSolver(const ConstraintSolver& other) = delete;
 
   /// Destructor
-  virtual ~ConstraintSolver() = default;
+  virtual ~ConstraintSolver();
 
   /// Add single skeleton
   void addSkeleton(const dynamics::SkeletonPtr& skeleton);
@@ -184,6 +184,24 @@ public:
   /// properties and registered skeletons and constraints will be copied over.
   virtual void setFromOtherConstraintSolver(const ConstraintSolver& other);
 
+  /// Get the handler used for computing contact surface parameters based on
+  /// the contact properties of the two colliding bodies.
+  ContactSurfaceHandlerPtr getContactSurfaceHandler() const;
+
+  /// Set the handler used for computing contact surface parameters based on
+  /// the contact properties of the two colliding bodies. This function
+  /// automatically sets the previous handler as parent of the given handler.
+  void setContactSurfaceHandler(ContactSurfaceHandlerPtr handler);
+
+  /// Remove the given contact surface handler. If it is not the last in the
+  /// chain of handlers, the neighbor handlers are automatically connected
+  /// when the given handler is removed. This function returns true when the
+  /// given handler was found. It returns false when the handler is not found.
+  /// The search procedure utilizes pointer equality (i.e. the shared pointers
+  /// have to point to the same address to be treated equal). Take special care
+  /// to make sure at least one handler is always available.
+  bool removeContactSurfaceHandler(const ContactSurfaceHandlerPtr& handler);
+
 protected:
   // TODO(JS): Docstring
   virtual void solveConstrainedGroup(ConstrainedGroup& group) = 0;
@@ -259,6 +277,10 @@ protected:
 
   /// Constraint group list
   std::vector<ConstrainedGroup> mConstrainedGroups;
+
+  /// Factory for ContactSurfaceParams for each contact
+  // Moved to gContactSurfaceHandlers in .cpp file to preserve ABI
+  // ContactSurfaceHandlerPtr mContactSurfaceHandler;
 };
 
 } // namespace constraint
