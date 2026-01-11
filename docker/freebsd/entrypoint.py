@@ -154,7 +154,12 @@ def main():
 
     cmd = ["qemu-system-x86_64"]
     if Path("/dev/kvm").exists():
-        cmd.append("-enable-kvm")
+        cmd.extend(["-enable-kvm", "-cpu", "host"])
+    else:
+        # Without KVM, use a CPU model that supports SSE4.2 and AVX2, which are
+        # commonly required by FreeBSD packages (especially Eigen). The 'max'
+        # model enables all features QEMU can emulate in software.
+        cmd.extend(["-cpu", "max"])
     cmd += [
         "-m",
         str(mem),
