@@ -404,15 +404,14 @@ def test_vm(args):
     remote_dir = args.remote_dir or f"/home/{args.user}/dart"
     build_dir = os.getenv("FREEBSD_VM_BUILD_DIR", DEFAULT_BUILD_DIR)
     build_type = os.getenv("FREEBSD_VM_BUILD_TYPE", "Release")
-    eigen_flags = "-DEIGEN_DONT_VECTORIZE=1 -DEIGEN_MAX_ALIGN_BYTES=0"
     cmake_args = [
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DDART_BUILD_DARTPY=OFF",
         "-DDART_BUILD_GUI=OFF",
         "-DDART_ENABLE_SDFORMAT=OFF",
+        "-DDART_ENABLE_SIMD=OFF",
         "-DDART_USE_SYSTEM_GOOGLETEST=ON",
         "-DDART_VERBOSE=ON",
-        f"-DCMAKE_CXX_FLAGS={shlex.quote(eigen_flags)}",
     ]
     cmake_args.extend(shlex.split(os.getenv("FREEBSD_VM_CMAKE_ARGS", "")))
     cmake_arg_str = " ".join(cmake_args)
