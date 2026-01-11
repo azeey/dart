@@ -156,7 +156,10 @@ def main():
     if Path("/dev/kvm").exists():
         cmd.extend(["-enable-kvm", "-cpu", "host"])
     else:
-        cmd.extend(["-cpu", "max"])
+        # Use Westmere CPU model for TCG emulation - it supports SSE4.2 but not
+        # AVX/AVX2 which have known emulation issues in QEMU's TCG that cause
+        # "Illegal instruction" crashes with FreeBSD packages (esp. Eigen).
+        cmd.extend(["-cpu", "Westmere-v2"])
     cmd += [
         "-m",
         str(mem),
