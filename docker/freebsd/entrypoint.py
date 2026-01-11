@@ -156,12 +156,7 @@ def main():
     if Path("/dev/kvm").exists():
         cmd.extend(["-enable-kvm", "-cpu", "host"])
     else:
-        # Without KVM, use Skylake-Client-v4 which supports SSE4.2 and AVX2.
-        # The 'max' model can cause "Illegal instruction" errors because it
-        # enables features that QEMU can't perfectly emulate in software.
-        # Skylake-Client-v4 is a safe choice that matches what FreeBSD packages
-        # are typically compiled for.
-        cmd.extend(["-cpu", "Skylake-Client-v4"])
+        cmd.extend(["-cpu", "max"])
     cmd += [
         "-m",
         str(mem),

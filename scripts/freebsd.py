@@ -411,6 +411,7 @@ def test_vm(args):
         "-DDART_ENABLE_SDFORMAT=OFF",
         "-DDART_USE_SYSTEM_GOOGLETEST=ON",
         "-DDART_VERBOSE=ON",
+        "-DCMAKE_CXX_FLAGS=-DEIGEN_DONT_VECTORIZE=1 -DEIGEN_MAX_ALIGN_BYTES=0",
     ]
     cmake_args.extend(shlex.split(os.getenv("FREEBSD_VM_CMAKE_ARGS", "")))
     cmake_arg_str = " ".join(cmake_args)
