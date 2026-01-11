@@ -198,9 +198,7 @@ TEST(MimicConstraint, PendulumMimicWorldFromSdf)
   options.resourceRetriever = retriever;
 
   WorldPtr world = dart::io::readWorld(Uri(worldUri), options);
-  if (!world) {
-    GTEST_SKIP() << "SDF support is not available in this build";
-  }
+  ASSERT_TRUE(world);
 
   retargetMimicJoints(world, "pendulum_with_base");
   setCollisionDetector(world, /*useOde=*/true);
@@ -291,9 +289,7 @@ TEST(MimicConstraint, FollowersMatchMiddlePendulum)
   options.resourceRetriever = retriever;
 
   WorldPtr world = dart::io::readWorld(Uri(worldUri), options);
-  if (!world) {
-    GTEST_SKIP() << "SDF support is not available in this build";
-  }
+  ASSERT_TRUE(world);
 
   retargetMimicJoints(world, "pendulum_with_base");
   setCollisionDetector(world, /*useOde=*/true);
