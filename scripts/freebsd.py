@@ -406,7 +406,6 @@ def test_vm(args):
     build_type = os.getenv("FREEBSD_VM_BUILD_TYPE", "Release")
     cmake_args = [
         f"-DCMAKE_BUILD_TYPE={build_type}",
-        "-DCMAKE_CXX_FLAGS=-DEIGEN_DONT_VECTORIZE=1",
         "-DDART_BUILD_DARTPY=OFF",
         "-DDART_BUILD_GUI=OFF",
         "-DDART_ENABLE_SDFORMAT=OFF",

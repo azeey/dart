@@ -219,6 +219,9 @@ if(DART_ENABLE_SIMD)
     target_compile_options(dart PUBLIC -march=native -faligned-new)
   endif()
 else()
+  # Disable Eigen vectorization when SIMD is off
+  target_compile_definitions(dart PUBLIC EIGEN_DONT_VECTORIZE=1)
+
   # Remove x86-specific flags when building on non-x86 architectures to keep
   # builds portable without enabling the SIMD option.
   if(NOT dart_host_architecture STREQUAL "x86"
