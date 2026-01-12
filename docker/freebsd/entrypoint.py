@@ -156,7 +156,7 @@ def main():
     if Path("/dev/kvm").exists():
         cmd.extend(["-enable-kvm", "-cpu", "host"])
     else:
-        cmd.extend(["-cpu", "max,-avx,-avx2,-avx512f"])
+        cmd.extend(["-cpu", "max,-avx,-avx2,-avx512f,-sse4.1,-sse4.2,-ssse3"])
     cmd += [
         "-m",
         str(mem),
