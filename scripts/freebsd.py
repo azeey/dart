@@ -200,7 +200,7 @@ def start_container(args):
 
     if Path("/dev/kvm").exists():
         print("KVM detected on host, passing --device /dev/kvm to Docker")
-        cmd.extend(["--device", "/dev/kvm"])
+        cmd.extend(["--device", "/dev/kvm", "--group-add", "kvm"])
     else:
         print("KVM not detected on host (/dev/kvm does not exist)")
 
