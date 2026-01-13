@@ -153,16 +153,31 @@ def main():
     write_seed(vm_dir, ssh_key, user_data, meta_data, seed_img, user)
 
     cmd = ["qemu-system-x86_64"]
-    if Path("/dev/kvm").exists():
-        print("KVM available - using hardware virtualization with host CPU")
+    kvm_path = Path("/dev/kvm")
+    print(
+        f"Checking KVM: /dev/kvm exists={kvm_path.exists()}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if kvm_path.exists():
+        print(
+            "KVM available - using hardware virtualization with host CPU",
+            file=sys.stderr,
+            flush=True,
+        )
         cmd.extend(["-enable-kvm", "-cpu", "host"])
     else:
         # Use Westmere CPU model which is well-supported by QEMU TCG and
         # doesn't include AVX or newer SIMD instructions that may cause
         # illegal instruction errors with FreeBSD packages compiled for
         # newer CPUs.
-        print("KVM not available - using Westmere CPU model for software emulation")
+        print(
+            "KVM not available - using Westmere CPU model for software emulation",
+            file=sys.stderr,
+            flush=True,
+        )
         cmd.extend(["-cpu", "Westmere"])
+    print(f"QEMU command: {' '.join(cmd[:10])}...", file=sys.stderr, flush=True)
     cmd += [
         "-m",
         str(mem),
