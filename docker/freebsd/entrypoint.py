@@ -154,9 +154,15 @@ def main():
 
     cmd = ["qemu-system-x86_64"]
     if Path("/dev/kvm").exists():
+        print("KVM available - using hardware virtualization with host CPU")
         cmd.extend(["-enable-kvm", "-cpu", "host"])
     else:
-        cmd.extend(["-cpu", "max,-avx,-avx2,-avx512f,-sse4.1,-sse4.2,-ssse3"])
+        # Use Westmere CPU model which is well-supported by QEMU TCG and
+        # doesn't include AVX or newer SIMD instructions that may cause
+        # illegal instruction errors with FreeBSD packages compiled for
+        # newer CPUs.
+        print("KVM not available - using Westmere CPU model for software emulation")
+        cmd.extend(["-cpu", "Westmere"])
     cmd += [
         "-m",
         str(mem),
