@@ -89,7 +89,16 @@ int main(int argc, char* argv[])
   for (std::size_t step = 0; step < numSteps; ++step)
   {
     world->step();
+
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> currentWallTime = currentTime - startTime;
+    double currentSimTime = (step + 1) * timeStep;
+    double currentRtf = currentWallTime.count() > 0 ? (currentSimTime / currentWallTime.count()) : 0.0;
+
+    std::cout << "\rStep: " << (step + 1) << " / " << numSteps
+              << " | RTF so far: " << currentRtf << std::flush;
   }
+  std::cout << "\n";
 
   auto endTime = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> wallTime = endTime - startTime;
