@@ -4,8 +4,9 @@ project(dart-examples)
 
 # None GUI examples
 add_subdirectory(hello_world)
-add_subdirectory(cylindrical_constraint)
 add_subdirectory(speed_test)
+add_subdirectory(sdf_perf_test)
+add_subdirectory(cylindrical_constraint)
 
 # OSG renderer examples
 add_subdirectory(atlas_puppet)
